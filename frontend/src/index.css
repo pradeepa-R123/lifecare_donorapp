@@ -1,0 +1,122 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --red: #E54934;
+  --red-d: #C73B29;
+  --red-l: #FEF2F0;
+  --red-m: #FDDDD9;
+  --warm: #FDF8F5;
+  --warm-d: #F5ECE6;
+  --warm-m: #EDD8CE;
+  --dark: #1C0A06;
+  --dark-m: #2E1108;
+  --dark-l: #3D1A10;
+  --white: #FFFFFF;
+  --border: #EDD8CE;
+  --text: #1C0A06;
+  --muted: #7C5040;
+  --light: #A87060;
+  --green: #059669;
+  --green-l: #ECFDF5;
+  --amber: #D97706;
+  --amber-l: #FFFBEB;
+  --blue: #2563EB;
+  --blue-l: #EFF6FF;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--warm);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(229, 73, 52, 0.35);
+  border-radius: 10px;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes popUp {
+  from { opacity: 0; transform: scale(0.93) translateY(14px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  14%       { transform: scale(1.13); }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(42px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(229, 73, 52, 0.4); }
+  50%       { box-shadow: 0 0 28px rgba(229, 73, 52, 0.8); }
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.animate-fadeUp   { animation: fadeUp 0.45s ease both; }
+.animate-popUp    { animation: popUp 0.22s ease both; }
+.animate-slideIn  { animation: slideIn 0.35s ease both; }
+.animate-heartbeat { animation: heartbeat 1.4s ease infinite; }
+.animate-glow     { animation: glow 2s ease infinite; }
+
+.card-hover {
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 48px rgba(229, 73, 52, 0.15) !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 3px rgba(229, 73, 52, 0.12);
+  outline: none;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed !important;
+}
+
+.toast {
+  animation: slideDown 0.3s ease;
+}
