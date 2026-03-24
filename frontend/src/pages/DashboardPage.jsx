@@ -83,8 +83,7 @@ export default function DashboardPage() {
     if (!donor) { navigate("/login"); return; }
     fetchRequests();
 
-    // ✅ FIX: connect socket and immediately emit donor:join
-    //         so the server adds this socket to room donor_${_id}
+  
     const socket = io("http://localhost:5300", {
       transports: ["websocket"],
       reconnectionAttempts: 5,
@@ -93,8 +92,7 @@ export default function DashboardPage() {
 
     socket.on("connect", () => {
       console.log("🔌 Socket connected:", socket.id);
-      // ✅ This is the critical line — without it the room is never joined
-      //    and io.to(`donor_${id}`).emit(...) goes to nobody
+     
       socket.emit("donor:join", donor._id);
       console.log(`✅ Joined donor room: donor_${donor._id}`);
     });

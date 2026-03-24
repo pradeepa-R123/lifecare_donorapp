@@ -2,21 +2,6 @@
 
 A production-level MERN Stack donor application that integrates in real-time with LifeCare BloodBank.
 
-## Architecture
-
-```
-LifePulse Donor App (:5300) ←→ LifeCare BloodBank Backend (:5002)
-                     ↕
-               MongoDB (donor data)
-```
-
-### Flow
-```
-Hospital → BloodBank (:5002) → POST /api/requests/incoming (Donor App :5300)
-         → Socket.IO → Donor sees request
-         → Accept → PATCH /api/blood-requests/:id/donor-response (BloodBank :5002)
-         → BloodBank updates inventory → Hospital notified
-```
 
 ## API Integration with BloodBank
 

@@ -328,7 +328,7 @@ router.post("/donation-confirmed", async (req, res) => {
           date:          confirmedDate,
           donorAge:      donor.age || 0,
           status:        "Completed",
-          type:          "Regular Donation",
+          type:          "Emergency Donation",
         },
       },
     }, { new: true });

@@ -82,8 +82,7 @@ donorSchema.methods.canDonate = function () {
   return this.lastDonationDate < threeMonthsAgo;
 };
 
-// ✅ Get lastDonationDate from most recent donationHistory entry (sorted desc)
-// This is the canonical getter — never uses createdAt/updatedAt
+
 donorSchema.virtual("latestDonationDate").get(function () {
   if (!this.donationHistory.length) return null;
   const sorted = [...this.donationHistory].sort(

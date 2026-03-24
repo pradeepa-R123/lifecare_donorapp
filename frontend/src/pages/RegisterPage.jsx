@@ -17,6 +17,72 @@ const INELIGIBLE_REASON_LABELS = {
   hasHIVHistory:       "HIV history",
 };
 
+// ── Validation ────────────────────────────────────────────────
+function validateBasic(basic) {
+  const errors = {};
+
+  // Name — letters and spaces only
+  if (!basic.name || basic.name.trim().length < 2)
+    errors.name = "Full name is required (min 2 characters).";
+  else if (!/^[a-zA-Z\s]+$/.test(basic.name.trim()))
+    errors.name = "Name must contain letters only.";
+
+  // Email — must have @
+  if (!basic.email || basic.email.trim() === "")
+    errors.email = "Email is required.";
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(basic.email.trim()))
+    errors.email = "Enter a valid email (e.g. you@example.com).";
+
+  // Password — min 6 chars
+  if (!basic.password || basic.password.length < 6)
+    errors.password = "Password must be at least 6 characters.";
+
+  // Confirm Password
+  if (!basic.confirmPassword)
+    errors.confirmPassword = "Please confirm your password.";
+  else if (basic.password !== basic.confirmPassword)
+    errors.confirmPassword = "Passwords do not match.";
+
+  // Age — 18 to 65
+  if (!basic.age)
+    errors.age = "Age is required.";
+  else if (isNaN(basic.age) || Number(basic.age) < 18 || Number(basic.age) > 65)
+    errors.age = "Age must be between 18 and 65.";
+
+  // Weight — min 50kg
+  if (!basic.weight)
+    errors.weight = "Weight is required.";
+  else if (isNaN(basic.weight) || Number(basic.weight) < 50)
+    errors.weight = "Minimum weight is 50 kg.";
+
+  // Gender
+  if (!basic.gender)
+    errors.gender = "Please select a gender.";
+
+  // Blood Group
+  if (!basic.bloodGroup)
+    errors.bloodGroup = "Please select a blood group.";
+
+  // Phone — 10-digit Indian number
+  if (!basic.phone || basic.phone.trim() === "")
+    errors.phone = "Phone number is required.";
+  else {
+    const cleaned = basic.phone.replace(/[\s\-]/g, "");
+    if (!/^(\+91|91)?[6-9]\d{9}$/.test(cleaned))
+      errors.phone = "Enter a valid 10-digit mobile number.";
+  }
+
+  // Donation Units
+  if (!basic.donationUnits)
+    errors.donationUnits = "Please select donation units.";
+
+  // Location
+  if (!basic.location || basic.location.trim().length < 2)
+    errors.location = "Location / City is required.";
+
+  return errors;
+}
+
 function YesNoField({ label, field, value, onChange, detail, detailField, detailValue, onDetailChange, detailPlaceholder }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -59,12 +125,14 @@ export default function RegisterPage() {
   const [loading,    setLoading]   = useState(false);
   const [toast,      setToast]     = useState(null);
   const [ineligible, setIneligible]= useState(null);
+  const [errors,     setErrors]    = useState({});
+  const [touched,    setTouched]   = useState({});
 
   const [basic, setBasic] = useState({
     name: "", email: "", password: "", confirmPassword: "",
     age: "", weight: "", gender: "", bloodGroup: "", phone: "", location: "", address: "",
-    donationUnits:  "1",
-    donationDate:   "",   // ✅ Manual donation date from calendar — single source of truth
+    donationUnits: "1",
+    donationDate:  "",
   });
 
   const [medical, setMedical] = useState({
@@ -74,28 +142,59 @@ export default function RegisterPage() {
     hadFeverLast7Days: false, hasMalariaHistory: false, hasHIVHistory: false,
   });
 
-  const handleBasic   = (e) => setBasic(p => ({ ...p, [e.target.name]: e.target.value }));
+  // ── Live field change with instant validation ──────────────
+  const handleBasic = (e) => {
+    const { name, value } = e.target;
+    const updated = { ...basic, [name]: value };
+    setBasic(updated);
+    // validate only touched fields live
+    if (touched[name]) {
+      const errs = validateBasic(updated);
+      setErrors(prev => ({ ...prev, [name]: errs[name] }));
+    }
+  };
+
+  const handleBlur = (name) => {
+    setTouched(t => ({ ...t, [name]: true }));
+    const errs = validateBasic(basic);
+    setErrors(prev => ({ ...prev, [name]: errs[name] }));
+  };
+
   const handleMedBool = (field, val) => setMedical(p => ({ ...p, [field]: val }));
   const handleMedText = (field, val) => setMedical(p => ({ ...p, [field]: val }));
 
-  const validateStep1 = () => {
-    const { name, email, password, confirmPassword, age, gender, bloodGroup, phone, location } = basic;
-    if (!name || !email || !password || !confirmPassword || !age || !gender || !bloodGroup || !phone || !location) {
-      setToast({ msg: "Please fill in all required fields", type: "error" }); return false;
+  // ── Field style helper ─────────────────────────────────────
+  const fieldStyle = (name) => ({
+    ...inp(),
+    border: errors[name] && touched[name]
+      ? "1.5px solid #EF4444"
+      : `1.5px solid ${P.border}`,
+    background: errors[name] && touched[name] ? "#FFF5F5" : "white",
+  });
+
+  // ── Inline error message ───────────────────────────────────
+  const ErrMsg = ({ name }) => errors[name] && touched[name]
+    ? <div style={{ color: "#EF4444", fontSize: 11.5, fontWeight: 600, marginTop: 4, marginBottom: 6 }}>⚠ {errors[name]}</div>
+    : null;
+
+  // ── Step 1 submit ──────────────────────────────────────────
+  const goToStep2 = () => {
+    // Mark all fields as touched
+    const allFields = Object.keys(basic);
+    const allTouched = allFields.reduce((acc, k) => ({ ...acc, [k]: true }), {});
+    setTouched(allTouched);
+
+    const errs = validateBasic(basic);
+    setErrors(errs);
+
+    if (Object.keys(errs).length > 0) {
+      setToast({ msg: "Please fix the errors before continuing.", type: "error" });
+      return;
     }
-    if (password !== confirmPassword) {
-      setToast({ msg: "Passwords do not match", type: "error" }); return false;
-    }
-    if (password.length < 6) {
-      setToast({ msg: "Password must be at least 6 characters", type: "error" }); return false;
-    }
-    const ageNum = parseInt(age);
-    if (ageNum < 18 || ageNum > 65) {
-      setToast({ msg: "Age must be between 18 and 65 to donate", type: "error" }); return false;
-    }
-    return true;
+    setStep(2);
   };
 
+  // ── Eligibility check ──────────────────────────────────────
   const checkEligibility = () => {
     const reasons = [];
     Object.entries(INELIGIBLE_REASON_LABELS).forEach(([key, label]) => {
@@ -104,6 +203,7 @@ export default function RegisterPage() {
     return reasons;
   };
 
+  // ── Final submit ───────────────────────────────────────────
   const submit = async () => {
     const reasons = checkEligibility();
     if (reasons.length > 0) { setIneligible(reasons); return; }
@@ -111,19 +211,17 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const payload = {
-        name:           basic.name,
-        email:          basic.email,
-        password:       basic.password,
-        age:            parseInt(basic.age),
-        gender:         basic.gender,
-        bloodGroup:     basic.bloodGroup,
-        phone:          basic.phone,
-        location:       basic.location,
-        address:        basic.address,
-        donationUnits:  parseInt(basic.donationUnits) || 1,
-        // ✅ donationDate is the single source of truth — sent to backend
-        // backend uses this to build donationHistory + set lastDonationDate
-        donationDate:   basic.donationDate || null,
+        name:          basic.name,
+        email:         basic.email,
+        password:      basic.password,
+        age:           parseInt(basic.age),
+        gender:        basic.gender,
+        bloodGroup:    basic.bloodGroup,
+        phone:         basic.phone,
+        location:      basic.location,
+        address:       basic.address,
+        donationUnits: parseInt(basic.donationUnits) || 1,
+        donationDate:  basic.donationDate || null,
         medicalEligibility: medical,
       };
 
@@ -140,7 +238,7 @@ export default function RegisterPage() {
     }
   };
 
-  // ── Ineligible screen ──────────────────────────────────────────────────────
+  // ── Ineligible screen ──────────────────────────────────────
   if (ineligible) {
     return (
       <div style={{ minHeight: "calc(100vh - 64px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 24px", background: `linear-gradient(160deg, ${P.warmD}, ${P.warm})` }}>
@@ -196,64 +294,164 @@ export default function RegisterPage() {
           {/* ── STEP 1 ── */}
           {step === 1 ? (
             <>
+              {/* Name */}
               <FG label="Full Name *">
-                <input name="name" placeholder="Your full name" value={basic.name} onChange={handleBasic} style={inp()} />
+                <input
+                  name="name"
+                  placeholder="Letters only"
+                  value={basic.name}
+                  onChange={handleBasic}
+                  onBlur={() => handleBlur("name")}
+                  style={fieldStyle("name")}
+                />
+                <ErrMsg name="name" />
               </FG>
 
+              {/* Email */}
               <FG label="Email Address *">
-                <input name="email" type="email" placeholder="you@example.com" value={basic.email} onChange={handleBasic} style={inp()} />
+                <input
+                  name="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={basic.email}
+                  onChange={handleBasic}
+                  onBlur={() => handleBlur("email")}
+                  style={fieldStyle("email")}
+                />
+                <ErrMsg name="email" />
               </FG>
 
+              {/* Password row */}
               <Row2>
                 <FG label="Password *">
-                  <input name="password" type="password" placeholder="Min 6 chars" value={basic.password} onChange={handleBasic} style={inp()} />
+                  <input
+                    name="password"
+                    type="password"
+                    placeholder="Min 6 characters"
+                    value={basic.password}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("password")}
+                    style={fieldStyle("password")}
+                  />
+                  <ErrMsg name="password" />
                 </FG>
                 <FG label="Confirm Password *">
-                  <input name="confirmPassword" type="password" placeholder="Repeat password" value={basic.confirmPassword} onChange={handleBasic} style={inp()} />
+                  <input
+                    name="confirmPassword"
+                    type="password"
+                    placeholder="Repeat password"
+                    value={basic.confirmPassword}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("confirmPassword")}
+                    style={fieldStyle("confirmPassword")}
+                  />
+                  <ErrMsg name="confirmPassword" />
                 </FG>
               </Row2>
 
+              {/* Age & Weight */}
               <Row2>
-                <FG label="Age *">
-                  <input name="age" type="number" placeholder="18–65" min={18} max={65} value={basic.age} onChange={handleBasic} style={inp()} />
+                <FG label="Age * (18–65)">
+                  <input
+                    name="age"
+                    type="number"
+                    placeholder="18–65"
+                    min={18} max={65}
+                    value={basic.age}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("age")}
+                    style={fieldStyle("age")}
+                  />
+                  <ErrMsg name="age" />
                 </FG>
-                <FG label="Weight (kg) *">
-                  <input name="weight" type="number" placeholder=">50 kg" min={50} value={basic.weight} onChange={handleBasic} style={inp()} />
+                <FG label="Weight (kg) * (min 50)">
+                  <input
+                    name="weight"
+                    type="number"
+                    placeholder="≥ 50 kg"
+                    min={50}
+                    value={basic.weight}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("weight")}
+                    style={fieldStyle("weight")}
+                  />
+                  <ErrMsg name="weight" />
                 </FG>
               </Row2>
 
+              {/* Gender & Blood Group */}
               <Row2>
                 <FG label="Gender *">
-                  <select name="gender" value={basic.gender} onChange={handleBasic} style={inp()}>
+                  <select
+                    name="gender"
+                    value={basic.gender}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("gender")}
+                    style={fieldStyle("gender")}
+                  >
                     <option value="">Select</option>
                     {["Male","Female","Other"].map(g => <option key={g}>{g}</option>)}
                   </select>
+                  <ErrMsg name="gender" />
                 </FG>
                 <FG label="Blood Group *">
-                  <select name="bloodGroup" value={basic.bloodGroup} onChange={handleBasic} style={inp()}>
+                  <select
+                    name="bloodGroup"
+                    value={basic.bloodGroup}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("bloodGroup")}
+                    style={fieldStyle("bloodGroup")}
+                  >
                     <option value="">Select</option>
                     {BLOOD_GROUPS.map(bg => <option key={bg}>{bg}</option>)}
                   </select>
+                  <ErrMsg name="bloodGroup" />
                 </FG>
               </Row2>
 
+              {/* Phone & Donation Units */}
               <Row2>
-                <FG label="Phone *">
-                  <input name="phone" placeholder="+91 XXXXX XXXXX" value={basic.phone} onChange={handleBasic} style={inp()} />
+                <FG label="Phone * (10-digit)">
+                  <input
+                    name="phone"
+                    placeholder="+91 XXXXX XXXXX"
+                    value={basic.phone}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("phone")}
+                    style={fieldStyle("phone")}
+                    maxLength={13}
+                  />
+                  <ErrMsg name="phone" />
                 </FG>
                 <FG label="Donation Units *">
-                  <select name="donationUnits" value={basic.donationUnits} onChange={handleBasic} style={inp()}>
+                  <select
+                    name="donationUnits"
+                    value={basic.donationUnits}
+                    onChange={handleBasic}
+                    onBlur={() => handleBlur("donationUnits")}
+                    style={fieldStyle("donationUnits")}
+                  >
                     <option value="1">1 Unit</option>
                     <option value="2">2 Units</option>
                   </select>
+                  <ErrMsg name="donationUnits" />
                 </FG>
               </Row2>
 
+              {/* Location */}
               <FG label="Location / City *">
-                <input name="location" placeholder="e.g. T. Nagar, Chennai" value={basic.location} onChange={handleBasic} style={inp()} />
+                <input
+                  name="location"
+                  placeholder="e.g. T. Nagar, Chennai"
+                  value={basic.location}
+                  onChange={handleBasic}
+                  onBlur={() => handleBlur("location")}
+                  style={fieldStyle("location")}
+                />
+                <ErrMsg name="location" />
               </FG>
 
-              {/* ✅ RENAMED: Donation Date (manual calendar input) */}
+              {/* Donation Date */}
               <FG label="Donation Date">
                 <input
                   name="donationDate"
@@ -263,20 +461,18 @@ export default function RegisterPage() {
                   max={new Date().toISOString().split("T")[0]}
                   style={inp()}
                 />
-                <div style={{ fontSize: 12, color: P.muted, marginTop: 5, lineHeight: 1.5 }}>
-                  📅 Select your most recent donation date. This will be saved as your Last Donation Date and shown in BloodBank.
-                  Leave blank if this is your first donation.
-                </div>
               </FG>
 
-              <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#2563EB", lineHeight: 1.6, marginBottom: 14 }}>
-                💡 <strong>Donation Units:</strong> Units you select will be added to BloodBank inventory for your blood group after registration.
-              </div>
-
+              {/* Address */}
               <FG label="Full Address (optional)">
-                <textarea name="address" rows={2} placeholder="Street, Area, City"
-                  value={basic.address} onChange={handleBasic}
-                  style={{ ...inp(), resize: "vertical", minHeight: 64 }} />
+                <textarea
+                  name="address"
+                  rows={2}
+                  placeholder="Street, Area, City"
+                  value={basic.address}
+                  onChange={handleBasic}
+                  style={{ ...inp(), resize: "vertical", minHeight: 64 }}
+                />
               </FG>
             </>
           ) : (
@@ -297,7 +493,7 @@ export default function RegisterPage() {
           )}
         </div>
 
-        {/* Footer */}
+        {/* Footer buttons */}
         <div style={{ padding: "0 36px 28px", display: "flex", gap: 12 }}>
           {step === 2 && (
             <button onClick={() => setStep(1)}
@@ -306,7 +502,7 @@ export default function RegisterPage() {
             </button>
           )}
           <button
-            onClick={() => { if (step === 1) { if (validateStep1()) setStep(2); } else { submit(); } }}
+            onClick={() => { if (step === 1) { goToStep2(); } else { submit(); } }}
             disabled={loading}
             style={{ flex: 2, padding: "13px", background: `linear-gradient(135deg,${P.red},${P.redD})`, color: "white", border: "none", borderRadius: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: 15, boxShadow: "0 6px 20px rgba(229,73,52,.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {loading && <Spinner />}
