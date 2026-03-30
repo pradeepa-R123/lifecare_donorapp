@@ -5,7 +5,29 @@ const BloodRequest = require("../models/BloodRequest");
 const Donor        = require("../models/Donor");
 const { protect }  = require("../middleware/auth");
 
-// POST /api/requests/incoming
+// ─── Helper: resolve donor from donorAppId ────────────────────────────────────
+async function resolveDonor(donorAppId) {
+  if (!donorAppId) return null;
+  const idStr = String(donorAppId).trim();
+
+  // 1. Try as MongoDB _id
+  if (idStr.match(/^[0-9a-fA-F]{24}$/)) {
+    const byId = await Donor.findById(idStr).catch(() => null);
+    if (byId) return byId;
+  }
+
+  // 2. Try as donorAppId field
+  const byField = await Donor.findOne({ donorAppId: idStr }).catch(() => null);
+  if (byField) return byField;
+
+  // 3. Try as email
+  const byEmail = await Donor.findOne({ email: idStr }).catch(() => null);
+  if (byEmail) return byEmail;
+
+  return null;
+}
+
+// ─── POST /api/requests/incoming ─────────────────────────────────────────────
 router.post("/incoming", async (req, res) => {
   try {
     const {
@@ -15,48 +37,60 @@ router.post("/incoming", async (req, res) => {
       donorRequestId, unitsRequired,
     } = req.body;
 
-    console.log(`Incoming request | donorAppId: "${donorAppId}" | bloodGroup: ${bloodGroup}`);
+    console.log(`\n📥 Incoming request | donorAppId: "${donorAppId}" | bloodGroup: ${bloodGroup}`);
 
-    let resolvedDonor = null;
-    if (donorAppId && donorAppId.match(/^[0-9a-fA-F]{24}$/)) {
-      resolvedDonor = await Donor.findById(donorAppId).catch(() => null);
+    // ✅ FIX 1: Safe null check before anything else
+    if (!donorAppId) {
+      console.error("❌ donorAppId is missing from request body");
+      return res.status(400).json({ message: "donorAppId is required" });
     }
-    if (!resolvedDonor) resolvedDonor = await Donor.findOne({ donorAppId });
-    if (!resolvedDonor) resolvedDonor = await Donor.findOne({ email: donorAppId });
+
+    // ✅ FIX 2: Use helper — no more crash on undefined.match()
+    const resolvedDonor = await resolveDonor(donorAppId);
 
     if (!resolvedDonor) {
-      console.error(`Donor not found for donorAppId: "${donorAppId}"`);
+      // ✅ FIX 3: Log ALL donors so you can see the ID mismatch in terminal
+      const allDonors = await Donor.find({}, { name: 1, donorAppId: 1, email: 1 }).lean();
+      console.error(`❌ Donor not found for donorAppId: "${donorAppId}"`);
+      console.error(`📋 Donors in DB:\n${JSON.stringify(allDonors, null, 2)}`);
       return res.status(404).json({ message: `Donor not found for donorAppId: ${donorAppId}` });
     }
+
+    console.log(`✅ Found donor: ${resolvedDonor.name} (_id: ${resolvedDonor._id})`);
 
     // ✅ 90-day rule check
     if (resolvedDonor.lastDonationDate) {
       const ninetyDaysAgo = new Date();
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
       if (new Date(resolvedDonor.lastDonationDate) > ninetyDaysAgo) {
-        console.warn(`Donor ${resolvedDonor.name} donated within 90 days — skipping`);
+        console.warn(`⚠️ Donor ${resolvedDonor.name} donated within 90 days — skipping`);
         return res.status(400).json({ message: "Donor donated within last 90 days. Not eligible." });
       }
     }
 
     // ✅ Availability check
     if (!resolvedDonor.available) {
-      console.warn(`Donor ${resolvedDonor.name} is not available — skipping`);
+      console.warn(`⚠️ Donor ${resolvedDonor.name} is not available — skipping`);
       return res.status(400).json({ message: "Donor is not available." });
     }
 
-    console.log(`Found donor: ${resolvedDonor.name} (_id: ${resolvedDonor._id})`);
-
+    // ✅ Duplicate check
     const existing = await BloodRequest.findOne({
-      bloodBankRequestId, assignedDonor: resolvedDonor._id,
+      bloodBankRequestId,
+      assignedDonor: resolvedDonor._id,
     });
-    if (existing) return res.status(200).json({ message: "Request already exists", request: existing });
+    if (existing) {
+      console.log(`⚠️ Duplicate request — already exists for donor ${resolvedDonor.name}`);
+      return res.status(200).json({ message: "Request already exists", request: existing });
+    }
 
     const request = await BloodRequest.create({
       bloodBankRequestId,
       donorRequestId:  donorRequestId || null,
       notificationId:  notificationId || null,
-      bloodGroup, units, hospitalName,
+      bloodGroup,
+      units,
+      hospitalName,
       patientName:    patientName  || "Not specified",
       department:     department   || "",
       reason:         reason       || "",
@@ -68,9 +102,13 @@ router.post("/incoming", async (req, res) => {
       expiresAt:      expiresAt ? new Date(expiresAt) : null,
     });
 
+    console.log(`✅ BloodRequest created: ${request._id} for donor ${resolvedDonor.name}`);
+
+    // ✅ FIX 4: Emit to correct socket room donor_<_id>
     const io = req.app.get("io");
     if (io) {
-      io.to(`donor_${resolvedDonor._id}`).emit("new:blood:request", {
+      const room = `donor_${resolvedDonor._id}`;
+      io.to(room).emit("new:blood:request", {
         _id:                request._id,
         bloodBankRequestId: request.bloodBankRequestId,
         bloodGroup:         request.bloodGroup,
@@ -78,48 +116,71 @@ router.post("/incoming", async (req, res) => {
         unitsRequired:      request.unitsRequired,
         hospitalName:       request.hospitalName,
         patientName:        request.patientName,
+        department:         request.department,
+        reason:             request.reason,
         priority:           request.priority,
         status:             request.status,
-        receivedAt:         request.receivedAt,
+        receivedAt:         request.createdAt,
         message: `Urgent: ${bloodGroup} blood needed at ${hospitalName}. ${units} unit(s) required.`,
       });
-      console.log(`Socket emitted to donor_${resolvedDonor._id}`);
+      console.log(`🔔 Socket emitted to room: ${room}`);
+    } else {
+      console.warn("⚠️ Socket (io) not available on app");
     }
 
-    res.status(201).json({ message: "Request sent to donor", requestId: request._id, donorId: resolvedDonor._id });
+    res.status(201).json({
+      message:   "Request sent to donor",
+      requestId: request._id,
+      donorId:   resolvedDonor._id,
+    });
   } catch (err) {
-    console.error("Incoming request error:", err);
+    console.error("❌ Incoming request error:", err.message);
+    console.error(err.stack);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
-// GET /api/requests/my
+// ─── GET /api/requests/my ─────────────────────────────────────────────────────
 router.get("/my", protect, async (req, res) => {
   try {
-    const requests = await BloodRequest.find({ assignedDonor: req.donor._id })
-      .sort({ receivedAt: -1 });
-    res.json({ requests });
+    // ✅ FIX 5: Support both req.donor and req.user set by auth middleware
+    const donorId = req.donor?._id || req.user?._id;
+    if (!donorId) return res.status(401).json({ message: "Unauthorized" });
+
+    const requests = await BloodRequest.find({ assignedDonor: donorId })
+      .sort({ createdAt: -1 });
+
+    // ✅ FIX 6: Return plain array so dashboard works with both Array.isArray(data) and data.requests
+    res.json(requests);
   } catch (err) {
+    console.error("❌ /my error:", err.message);
     res.status(500).json({ message: "Failed to fetch requests" });
   }
 });
 
-// GET /api/requests/pending
+// ─── GET /api/requests/pending ───────────────────────────────────────────────
 router.get("/pending", protect, async (req, res) => {
   try {
+    const donorId = req.donor?._id || req.user?._id;
+    if (!donorId) return res.status(401).json({ message: "Unauthorized" });
+
     const requests = await BloodRequest.find({
-      assignedDonor: req.donor._id, status: "Pending",
-    }).sort({ receivedAt: -1 });
+      assignedDonor: donorId,
+      status: "Pending",
+    }).sort({ createdAt: -1 });
+
     res.json({ requests, count: requests.length });
   } catch (err) {
+    console.error("❌ /pending error:", err.message);
     res.status(500).json({ message: "Failed to fetch pending requests" });
   }
 });
 
-// PATCH /api/requests/:id/accept
+// ─── PATCH /api/requests/:id/accept ─────────────────────────────────────────
 router.patch("/:id/accept", protect, async (req, res) => {
   try {
-    const donor = await Donor.findById(req.donor._id);
+    const donorId = req.donor?._id || req.user?._id;
+    const donor   = await Donor.findById(donorId);
     if (!donor) return res.status(404).json({ message: "Donor not found" });
 
     // ✅ 90-day validation
@@ -145,7 +206,7 @@ router.patch("/:id/accept", protect, async (req, res) => {
 
     // ✅ Check if donor already has an active accepted request
     const alreadyAccepted = await BloodRequest.findOne({
-      assignedDonor: req.donor._id,
+      assignedDonor: donorId,
       status:        "Accepted",
     });
     if (alreadyAccepted) {
@@ -154,16 +215,16 @@ router.patch("/:id/accept", protect, async (req, res) => {
       });
     }
 
-    // ✅ Find the request first
+    // ✅ Find the request
     const existing = await BloodRequest.findOne({
-      _id: req.params.id, assignedDonor: req.donor._id,
+      _id: req.params.id, assignedDonor: donorId,
     });
     if (!existing)
       return res.status(404).json({ message: "Request not found" });
     if (existing.status !== "Pending")
       return res.status(400).json({ message: "Request is no longer pending" });
 
-    // ✅ Check if units already fulfilled (safe for old docs without these fields)
+    // ✅ Check if already fulfilled
     const unitsRequired  = existing.unitsRequired  || 1;
     const unitsFulfilled = existing.unitsFulfilled || 0;
     if (unitsFulfilled >= unitsRequired) {
@@ -183,18 +244,17 @@ router.patch("/:id/accept", protect, async (req, res) => {
       { new: true }
     );
 
-
     const isFullyFulfilled = request.unitsFulfilled >= request.unitsRequired;
 
     // ✅ Mark donor as unavailable
-    await Donor.findByIdAndUpdate(req.donor._id, { available: false });
+    await Donor.findByIdAndUpdate(donorId, { available: false });
 
     if (isFullyFulfilled) {
       // ✅ Cancel all remaining Pending requests for same blood bank request
       await BloodRequest.updateMany(
         {
           bloodBankRequestId: request.bloodBankRequestId,
-          assignedDonor:      { $ne: req.donor._id },
+          assignedDonor:      { $ne: donorId },
           status:             "Pending",
         },
         {
@@ -203,7 +263,6 @@ router.patch("/:id/accept", protect, async (req, res) => {
         }
       );
 
-      // ✅ Notify all remaining donors via socket
       const io = req.app.get("io");
       if (io) {
         io.emit("request:fulfilled", {
@@ -226,28 +285,29 @@ router.patch("/:id/accept", protect, async (req, res) => {
           unitsRequired:   request.unitsRequired,
           isFullyFulfilled,
           donor: {
-            donorAppId:  donor._id.toString(),
-            name:        donor.name,
-            email:       donor.email,
-            phone:       donor.phone,
-            bloodGroup:  donor.bloodGroup,
-            location:    donor.location,
-            age:         donor.age,
-            gender:      donor.gender,
+            donorAppId:         donor._id.toString(),
+            name:               donor.name,
+            email:              donor.email,
+            phone:              donor.phone,
+            bloodGroup:         donor.bloodGroup,
+            location:           donor.location,
+            age:                donor.age,
+            gender:             donor.gender,
             lastDonationDate:   donor.lastDonationDate || null,
             medicalEligibility: { isEligible: donor.isEligible },
           },
         });
-        console.log(`BloodBank notified: Donor ${donor.name} accepted (${request.unitsFulfilled}/${request.unitsRequired} units)`);
+        console.log(`✅ BloodBank notified: Donor ${donor.name} accepted (${request.unitsFulfilled}/${request.unitsRequired} units)`);
       }
     } catch (bbErr) {
-      console.warn("BloodBank notify failed:", bbErr.message);
+      console.warn("⚠️ BloodBank notify failed:", bbErr.message);
     }
 
     const io = req.app.get("io");
     if (io) {
-      io.to(`donor_${donor._id}`).emit("request:status:updated", {
-        requestId: request._id, status: "Accepted",
+      io.to(`donor_${donorId}`).emit("request:status:updated", {
+        requestId: request._id,
+        status:    "Accepted",
       });
     }
 
@@ -257,20 +317,24 @@ router.patch("/:id/accept", protect, async (req, res) => {
       isFullyFulfilled,
     });
   } catch (err) {
-    console.error("Accept error:", err);
+    console.error("❌ Accept error:", err.message);
+    console.error(err.stack);
     res.status(500).json({ message: "Failed to accept request" });
   }
 });
 
-// PATCH /api/requests/:id/decline
+// ─── PATCH /api/requests/:id/decline ─────────────────────────────────────────
 router.patch("/:id/decline", protect, async (req, res) => {
   try {
+    const donorId = req.donor?._id || req.user?._id;
     const { reason } = req.body;
+
     const request = await BloodRequest.findOne({
-      _id: req.params.id, assignedDonor: req.donor._id,
+      _id: req.params.id, assignedDonor: donorId,
     });
     if (!request) return res.status(404).json({ message: "Request not found" });
-    if (request.status !== "Pending") return res.status(400).json({ message: "Request is no longer pending" });
+    if (request.status !== "Pending")
+      return res.status(400).json({ message: "Request is no longer pending" });
 
     request.status        = "Declined";
     request.declinedAt    = new Date();
@@ -282,34 +346,31 @@ router.patch("/:id/decline", protect, async (req, res) => {
       if (bbUrl) {
         await axios.patch(`${bbUrl}/api/requests/donor-response`, {
           requestId:     request.donorRequestId,
-          donorAppId:    req.donor._id.toString(),
+          donorAppId:    donorId.toString(),
           status:        "Declined",
           declineReason: reason || "",
         });
       }
     } catch (bbErr) {
-      console.warn("BloodBank notify failed:", bbErr.message);
+      console.warn("⚠️ BloodBank notify failed:", bbErr.message);
     }
 
     res.json({ message: "Request declined", request });
   } catch (err) {
+    console.error("❌ Decline error:", err.message);
     res.status(500).json({ message: "Failed to decline request" });
   }
 });
 
-// POST /api/requests/donation-confirmed
-// Called by BloodBank when donation is fulfilled
+// ─── POST /api/requests/donation-confirmed ────────────────────────────────────
 router.post("/donation-confirmed", async (req, res) => {
   try {
     const { donorAppId, bloodGroup, units, donationDate, hospitalName, patientName } = req.body;
 
-    console.log(`🩸 Donation confirmed | donorAppId: ${donorAppId} | bloodGroup: ${bloodGroup}`);
+    console.log(`\n🩸 Donation confirmed | donorAppId: ${donorAppId} | bloodGroup: ${bloodGroup}`);
 
-    let donor = null;
-    if (donorAppId && donorAppId.match(/^[0-9a-fA-F]{24}$/)) {
-      donor = await Donor.findById(donorAppId).catch(() => null);
-    }
-    if (!donor) donor = await Donor.findOne({ donorAppId }).catch(() => null);
+    // ✅ FIX: Use shared helper
+    const donor = await resolveDonor(donorAppId);
 
     console.log(`Donor found: ${donor?.name || "NOT FOUND"}`);
     if (!donor) return res.status(404).json({ message: "Donor not found" });
@@ -336,7 +397,7 @@ router.post("/donation-confirmed", async (req, res) => {
     console.log(`✅ Donation confirmed for ${donor.name} — history entries: ${updated.donationHistory.length}`);
     res.json({ message: "Donation confirmed and donor history updated." });
   } catch (err) {
-    console.error("Donation confirmed error:", err.message);
+    console.error("❌ Donation confirmed error:", err.message);
     res.status(500).json({ message: "Server error" });
   }
 });
